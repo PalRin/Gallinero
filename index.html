@@ -177,15 +177,15 @@
   }
   .hen-profile-head { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 4px 0 16px; }
   .hen-photo-big {
-    width: 96px; height: 96px; border-radius: 50%; overflow: hidden; cursor: pointer;
+    width: 200px; height: 200px; border-radius: 50%; overflow: hidden; cursor: pointer;
     background: var(--klein); display: flex; align-items: center; justify-content: center;
-    position: relative; margin-bottom: 6px;
+    position: relative; margin: 0 auto 8px;
   }
   .hen-photo-big img { width: 100%; height: 100%; object-fit: cover; }
-  .hen-photo-placeholder { color: #fff; opacity: 0.8; font-size: 30px; }
+  .hen-photo-placeholder { color: #fff; opacity: 0.8; font-size: 60px; }
   .hen-photo-edit {
     position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.55);
-    color: #fff; font-size: 9.5px; text-align: center; padding: 3px 0;
+    color: #fff; font-size: 12px; text-align: center; padding: 6px 0;
   }
   .hen-notes { display: flex; flex-direction: column; gap: 8px; }
   .note { background: rgba(16,16,16,0.03); border-radius: 10px; padding: 8px 10px; }
@@ -282,7 +282,6 @@
     <button data-tab="miembros" class="active"><span class="ic">🐔</span><span>Miembros</span></button>
     <button data-tab="ponedero"><span class="ic">🥚</span><span>Ponedero</span></button>
     <button data-tab="info"><span class="ic">ℹ️</span><span>Info</span></button>
-    <button data-tab="fotos"><span class="ic">📷</span><span>Fotos</span></button>
     <button data-tab="compra"><span class="ic">🛒</span><span>Compra</span></button>
   </nav>
 </div>
@@ -312,17 +311,15 @@ const auth = firebase.auth();
 const usernamesCol = db.collection("usernames");
 
 // Un documento por cada "bloque" de datos, todos dentro de la colección "state".
-// Las fotos van en su propia colección porque cada una es independiente (se
-// suben y borran una a una) y así ninguna acumula demasiado en un solo documento.
 const stateDoc = (name) => db.collection("state").doc(name);
-const fotosCol = db.collection("fotos");
 
 // Candados de seguridad: hasta que cada colección no haya recibido al menos
 // una vez los datos reales de Firebase, está prohibido guardar en ella. Esto
 // evita que una acción muy rápida al abrir la app sobrescriba datos de todos
 // con un array local que todavía estaba vacío (justo lo que pasó el 3 de octubre).
 let membersLoaded = false, turnosLoaded = false, infoLoaded = false,
-    compraLoaded = false, ponederoLoaded = false, hensLoaded = false;
+    compraLoaded = false, ponederoLoaded = false, hensLoaded = false,
+    maintenanceLoaded = false;
 
 function saveMembers() {
   if (!membersLoaded) { console.warn("Bloqueado: members aún no cargado"); return; }
@@ -335,6 +332,10 @@ function saveTurnos() {
 function saveInfo() {
   if (!infoLoaded) { console.warn("Bloqueado: info aún no cargada"); return; }
   stateDoc("info").set({ entries: infoEntries });
+}
+function saveMaintenance() {
+  if (!maintenanceLoaded) { console.warn("Bloqueado: mantenimiento aún no cargado"); return; }
+  stateDoc("maintenance").set({ entries: maintenanceEntries });
 }
 function saveCompra() {
   if (!compraLoaded) { console.warn("Bloqueado: compra aún no cargada"); return; }
@@ -375,18 +376,22 @@ const DEFAULT_ENTRIES = [
 let infoEntries = [];
 let editingEntryId = null;
 let addingEntry = false;
-let fotos = [];
+let maintenanceEntries = [];
+let editingMaintId = null;
+let addingMaint = false;
 let compra = [];
 
 const PONEDERO_COUNT = 40;
 let ponedero = Array(PONEDERO_COUNT).fill(false);
 let ponederoDraft = Array(PONEDERO_COUNT).fill(false);
+let ponederoDraftTouched = false; // true solo desde que tocas un huevo hasta que confirmas o cancelas
 let ponederoLog = [];
 
 let hensOpen = false;
 let hens = [];
 let addingNoteFor = null;
 let editingNote = null;
+let editingHenName = null;
 
 let calMonth = (() => { const d = new Date(); d.setDate(1); return d; })();
 
@@ -752,7 +757,6 @@ function render() {
   if (tab === "miembros") main.innerHTML = renderMiembros();
   if (tab === "ponedero") main.innerHTML = renderPonedero();
   if (tab === "info") main.innerHTML = renderInfo();
-  if (tab === "fotos") main.innerHTML = renderFotos();
   if (tab === "compra") main.innerHTML = renderCompra();
   bindEvents();
 }
@@ -1017,7 +1021,7 @@ function renderPonedero() {
   const count = ponederoDraft.filter(Boolean).length;
   const currentCount = ponedero.filter(Boolean).length;
   return `
-    <div class="nest-banner">📦 Ahora mismo hay <strong>${currentCount}</strong> ${currentCount === 1 ? "huevo" : "huevos"} en el nido</div>
+    <div class="nest-banner">📦 Ahora mismo hay <strong>${currentCount}</strong> ${currentCount === 1 ? "huevo" : "huevos"}</div>
     <div class="card ponedero-card">
       <div class="card-title">Ponedero</div>
       <p class="ponedero-hint">Marca o desmarca los huevos y pulsa "Confirmar" para registrar el grupo.</p>
@@ -1130,7 +1134,18 @@ function renderHenProfile(hen) {
         <input type="file" accept="image/*" hidden onchange="handleHenPhotoUpload('${hen.id}', event.target.files[0])" />
         <span class="hen-photo-edit">${hen.photo ? "Cambiar foto" : "Añadir foto"}</span>
       </label>
-      <div class="card-title">${hen.name}</div>
+      ${editingHenName === hen.id ? `
+        <div class="row" style="justify-content:center;">
+          <input type="text" id="henNameInput" value="${hen.name}" style="text-align:center; max-width:160px;" onkeydown="if(event.key==='Enter') saveHenName('${hen.id}')" />
+          <button class="link-btn" onclick="saveHenName('${hen.id}')">Guardar</button>
+          <button class="link-btn muted" onclick="cancelEditHenName()">Cancelar</button>
+        </div>
+      ` : `
+        <div class="card-title" style="display:flex; align-items:center; gap:6px;">
+          ${hen.name}
+          <button class="link-btn" onclick="startEditHenName('${hen.id}')" title="Editar nombre" style="font-size:12px;">✏️</button>
+        </div>
+      `}
       ${hen.acquired ? `<div class="hen-meta">Desde el ${formatDateEs(hen.acquired)}</div>` : ""}
     </div>
     <div class="card">
@@ -1176,22 +1191,53 @@ function renderInfo() {
       </div>
     </div>` : `<button class="add-entry" onclick="startAddEntry()">+ Añadir entrada</button>`;
 
-  return entriesHtml + addFormHtml;
-}
+  const maintSorted = [...maintenanceEntries].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const maintItemsHtml = maintSorted.map(m => {
+    if (editingMaintId === m.id) {
+      return `
+        <div class="note-form">
+          <input type="text" id="editMaintName-${m.id}" value="${m.name.replace(/"/g,'&quot;')}" placeholder="Nombre" />
+          <input type="date" id="editMaintDate-${m.id}" value="${m.date || ""}" />
+          <textarea id="editMaintNotes-${m.id}" rows="2" placeholder="Notas">${m.notes || ""}</textarea>
+          <div class="entry-actions">
+            <button class="link-btn" onclick="saveEditMaint('${m.id}')">Guardar</button>
+            <button class="link-btn muted" onclick="cancelEditMaint()">Cancelar</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="note">
+        <div class="note-head">
+          <span class="note-date">${m.name}${m.date ? " · " + formatDateEs(m.date) : ""}</span>
+          <div class="entry-actions">
+            <button class="link-btn" onclick="startEditMaint('${m.id}')">Editar</button>
+            <button class="trash" onclick="deleteMaint('${m.id}')">🗑</button>
+          </div>
+        </div>
+        ${m.notes ? `<div class="note-text">${m.notes}</div>` : ""}
+      </div>`;
+  }).join("") || `<div class="empty">Sin entradas de mantenimiento todavía</div>`;
 
-function renderFotos() {
-  return `
-    <label class="upload">
-      📷 Subir foto
-      <input type="file" accept="image/*" onchange="handleUpload(event)" hidden />
-    </label>
-    <div class="gallery">
-      ${fotos.map(f => `
-        <div class="photo">
-          <img src="${f.src}" />
-          <div class="photo-meta"><span>${f.author} · ${f.date}</span><button onclick="removeFoto('${f.id}')">🗑</button></div>
-        </div>`).join("") || `<div class="empty">Todavía no hay fotos de las gallinas</div>`}
+  const addMaintHtml = addingMaint ? `
+    <div class="note-form">
+      <input type="text" id="newMaintName" placeholder="Ej: Pilas puerta trasera" />
+      <input type="date" id="newMaintDate" value="${todayISO()}" />
+      <textarea id="newMaintNotes" rows="2" placeholder="Notas (opcional)"></textarea>
+      <div class="entry-actions">
+        <button class="link-btn" onclick="addMaint()">Guardar</button>
+        <button class="link-btn muted" onclick="cancelAddMaint()">Cancelar</button>
+      </div>
+    </div>` : `<button class="add-entry small" onclick="startAddMaint()">+ Añadir elemento</button>`;
+
+  const maintHtml = `
+    <div class="card">
+      <div class="card-title">🔧 Mantenimiento</div>
+      <div class="legend">Pilas de las puertas, revisiones, y cualquier cosa que haya que ir anotando con fecha</div>
+      <div class="hen-notes">${maintItemsHtml}</div>
+      ${addMaintHtml}
     </div>`;
+
+  return entriesHtml + addFormHtml + maintHtml;
 }
 
 function renderCompra() {
@@ -1382,6 +1428,7 @@ function approveAllProposals() {
 function discardAllProposals() { proposals = []; render(); }
 function toggleEgg(i) {
   ponederoDraft[i] = !ponederoDraft[i];
+  ponederoDraftTouched = true;
   render();
 }
 function ponederoDirty() { return ponederoDraft.some((v,i) => v !== ponedero[i]); }
@@ -1399,10 +1446,15 @@ function confirmPonedero() {
   if (llevados > 0) entries.push({ id: uid(), member: me || "Alguien", ts: new Date().toISOString(), action: "llevo", count: llevados });
   ponederoLog = [...entries, ...ponederoLog].slice(0, 60);
   ponedero = [...ponederoDraft];
+  ponederoDraftTouched = false;
   savePonedero();
   render();
 }
-function cancelPonedero() { ponederoDraft = [...ponedero]; render(); }
+function cancelPonedero() {
+  ponederoDraft = [...ponedero];
+  ponederoDraftTouched = false;
+  render();
+}
 function deleteLogEntry(id) {
   if (!confirmFun("Vas a borrar esta entrada del registro.")) return;
   ponederoLog = ponederoLog.filter(e => e.id !== id);
@@ -1425,6 +1477,16 @@ function removeHen(id) {
   render();
 }
 function openHen(id) { selectedHenId = id; render(); }
+function startEditHenName(id) { editingHenName = id; render(); }
+function cancelEditHenName() { editingHenName = null; render(); }
+function saveHenName(id) {
+  const newName = document.getElementById("henNameInput").value.trim();
+  if (!newName) return;
+  hens = hens.map(h => h.id === id ? { ...h, name: newName } : h);
+  editingHenName = null;
+  saveHens();
+  render();
+}
 function handleHenPhotoUpload(henId, file) {
   if (!file) return;
   const reader = new FileReader();
@@ -1504,35 +1566,35 @@ function deleteEntry(id) {
   render();
 }
 
-function handleUpload(e) {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    const img = new Image();
-    img.onload = () => {
-      let w = img.width, h = img.height, max = 900;
-      if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
-      else if (h > max) { w = Math.round(w * max / h); h = max; }
-      const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
-      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
-      const id = uid();
-      fotosCol.doc(id).set({
-        src: dataUrl,
-        author: me || "Alguien",
-        date: new Date().toLocaleDateString("es-ES"),
-        ts: Date.now(),
-      });
-    };
-    img.src = ev.target.result;
-  };
-  reader.readAsDataURL(file);
+function startAddMaint() { addingMaint = true; render(); }
+function cancelAddMaint() { addingMaint = false; render(); }
+function addMaint() {
+  const name = document.getElementById("newMaintName").value.trim();
+  const date = document.getElementById("newMaintDate").value;
+  const notes = document.getElementById("newMaintNotes").value.trim();
+  if (!name) return;
+  maintenanceEntries.push({ id: uid(), name, date, notes });
+  addingMaint = false;
+  saveMaintenance();
+  render();
 }
-function removeFoto(id) {
-  if (!confirmFun("Vas a borrar esta foto.")) return;
-  fotosCol.doc(id).delete();
+function startEditMaint(id) { editingMaintId = id; render(); }
+function cancelEditMaint() { editingMaintId = null; render(); }
+function saveEditMaint(id) {
+  const name = document.getElementById(`editMaintName-${id}`).value.trim() || "Sin nombre";
+  const date = document.getElementById(`editMaintDate-${id}`).value;
+  const notes = document.getElementById(`editMaintNotes-${id}`).value.trim();
+  maintenanceEntries = maintenanceEntries.map(m => m.id === id ? { ...m, name, date, notes } : m);
+  editingMaintId = null;
+  saveMaintenance();
+  render();
+}
+function deleteMaint(id) {
+  if (!confirmFun("Vas a borrar esta entrada de mantenimiento.")) return;
+  maintenanceEntries = maintenanceEntries.filter(m => m.id !== id);
+  if (editingMaintId === id) editingMaintId = null;
+  saveMaintenance();
+  render();
 }
 
 function addItem() {
@@ -1599,6 +1661,11 @@ stateDoc("info").onSnapshot((snap) => {
   infoLoaded = true;
   render();
 });
+stateDoc("maintenance").onSnapshot((snap) => {
+  maintenanceEntries = (snap.data() && snap.data().entries) || [];
+  maintenanceLoaded = true;
+  render();
+});
 stateDoc("compra").onSnapshot((snap) => {
   const data = snap.data() || {};
   compra = data.items || [];
@@ -1611,7 +1678,7 @@ stateDoc("ponedero").onSnapshot((snap) => {
   const data = snap.data() || {};
   ponedero = data.marked || Array(PONEDERO_COUNT).fill(false);
   ponederoLog = data.log || [];
-  if (!ponederoDirty()) ponederoDraft = [...ponedero];
+  if (!ponederoDraftTouched) ponederoDraft = [...ponedero];
   ponederoLoaded = true;
   render();
 });
@@ -1620,11 +1687,6 @@ stateDoc("hens").onSnapshot((snap) => {
   hensLoaded = true;
   render();
 });
-fotosCol.orderBy("ts", "desc").onSnapshot((snap) => {
-  fotos = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  render();
-});
-
 render();
 </script>
 </body>
