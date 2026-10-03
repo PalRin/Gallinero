@@ -63,9 +63,14 @@
     background: var(--yolk); color: var(--ink); border: none; border-radius: 999px;
     padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
+  #whoamiBox { display: flex; align-items: center; gap: 6px; }
   .hi {
     font-size: 12.5px; font-weight: 500; color: var(--white);
     background: var(--ink); padding: 7px 14px; border-radius: 999px;
+  }
+  .logout-btn {
+    width: 28px; height: 28px; border-radius: 50%; border: none;
+    background: var(--ink); color: var(--yolk); font-size: 13px; cursor: pointer;
   }
   main { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
   .badge {
@@ -110,6 +115,13 @@
   .card-title-row .card-title { margin-bottom: 0; }
   .link-btn { background: none; border: none; color: var(--klein); font-weight: 600; font-size: 13px; cursor: pointer; }
   .link-btn.muted { color: var(--ink); opacity: 0.4; }
+  .auth-links { display: flex; flex-direction: column; gap: 8px; align-items: center; margin-top: 10px; }
+  .auth-error { color: #C0392B; font-size: 12.5px; margin: 4px 0; text-align: center; }
+  .auth-notice { color: var(--klein); font-size: 12.5px; margin: 4px 0; text-align: center; }
+  .btn-icon-wide {
+    background: var(--klein); color: #fff; border: none; border-radius: 999px;
+    padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 4px;
+  }
   .identify {
     background: var(--white); border: 2px solid var(--yolk); border-radius: 20px;
     padding: 32px 20px; text-align: center; display: flex; flex-direction: column;
@@ -274,6 +286,7 @@
 <!-- Firebase (conexión real a la base de datos compartida) -->
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 
 <script>
 const firebaseConfig = {
@@ -287,6 +300,12 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const auth = firebase.auth();
+
+// Colección pública (solo lectura sin sesión) que guarda qué email corresponde
+// a cada nombre, para poder iniciar sesión tocando el nombre + la contraseña,
+// sin tener que escribir el email cada vez.
+const usernamesCol = db.collection("usernames");
 
 // Un documento por cada "bloque" de datos, todos dentro de la colección "state".
 // Las fotos van en su propia colección porque cada una es independiente (se
@@ -305,6 +324,11 @@ function saveHens() { stateDoc("hens").set({ list: hens }); }
 <script>
 let me = "";
 let tab = "miembros";
+let authReady = false;      // true en cuanto Firebase ha comprobado si ya había sesión
+let authStep = null;        // null | "password" | "register" | "reset"
+let authTargetName = "";    // nombre sobre el que se está actuando (login o registro)
+let authError = "";
+let authNotice = "";
 
 // Estos arrays empiezan vacíos: en cuanto Firebase responda (normalmente
 // en menos de un segundo) se rellenan solos con los datos compartidos reales.
@@ -428,17 +452,122 @@ const PONEDERO_POSITIONS = Array.from({length: PONEDERO_COUNT}).map((_,i) => {
   return { x: 150 + r*Math.cos(theta), y: 150 + r*Math.sin(theta) };
 });
 
-function identify(name) {
-  const clean = (name || "").trim();
-  if (!clean) return;
-  me = clean;
-  if (!members.some(m => m.name === clean)) {
-    members.push({ name: clean, active: true });
-    saveMembers();
-  }
-  document.getElementById("whoamiBox").outerHTML = `<div id="whoamiBox" class="hi">Hola, ${me}</div>`;
+function translateAuthError(err) {
+  const code = err && err.code;
+  if (code === "auth/wrong-password" || code === "auth/invalid-credential") return "Contraseña incorrecta.";
+  if (code === "auth/user-not-found") return "No encontramos esa cuenta.";
+  if (code === "auth/email-already-in-use") return "Ese email ya está registrado con otro nombre.";
+  if (code === "auth/weak-password") return "La contraseña debe tener al menos 6 caracteres.";
+  if (code === "auth/invalid-email") return "Ese email no es válido.";
+  if (code === "auth/too-many-requests") return "Demasiados intentos, espera un momento.";
+  return "Algo no ha ido bien, inténtalo otra vez.";
+}
+
+// Al tocar un nombre: si ya tiene cuenta, pide contraseña; si es un nombre
+// antiguo sin cuenta todavía (de antes de añadir el login), pide completarla.
+function selectMemberForLogin(name) {
+  const member = members.find(m => m.name === name);
+  authTargetName = name;
+  authError = "";
+  authNotice = "";
+  authStep = (member && member.email) ? "password" : "register";
   render();
 }
+
+function startNewMemberRegistration() {
+  authTargetName = "";
+  authError = "";
+  authNotice = "";
+  authStep = "register";
+  render();
+}
+
+function cancelAuth() {
+  authStep = null;
+  authTargetName = "";
+  authError = "";
+  authNotice = "";
+  render();
+}
+
+function submitPassword() {
+  const password = document.getElementById("authPassword").value;
+  const member = members.find(m => m.name === authTargetName);
+  if (!member || !member.email || !password) return;
+  auth.signInWithEmailAndPassword(member.email, password)
+    .then(() => {
+      me = authTargetName;
+      authStep = null;
+      render();
+    })
+    .catch(err => { authError = translateAuthError(err); render(); });
+}
+
+function submitRegister() {
+  const isNew = !authTargetName;
+  const name = (isNew ? document.getElementById("authName").value : authTargetName).trim();
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value;
+  if (!name || !email || !password) { authError = "Rellena nombre, email y contraseña."; render(); return; }
+  if (isNew && members.some(m => m.name === name)) { authError = "Ese nombre ya existe, elígelo en la lista."; render(); return; }
+
+  auth.createUserWithEmailAndPassword(email, password)
+    .then(() => usernamesCol.doc(name).set({ email }))
+    .then(() => {
+      if (members.some(m => m.name === name)) {
+        members = members.map(m => m.name === name ? { ...m, email } : m);
+      } else {
+        members.push({ name, active: true, email });
+      }
+      saveMembers();
+      me = name;
+      authStep = null;
+      render();
+    })
+    .catch(err => { authError = translateAuthError(err); render(); });
+}
+
+function startPasswordReset() {
+  authError = "";
+  authNotice = "";
+  authStep = "reset";
+  render();
+}
+
+function submitPasswordReset() {
+  const email = document.getElementById("authResetEmail").value.trim();
+  if (!email) return;
+  auth.sendPasswordResetEmail(email)
+    .then(() => { authNotice = "Te hemos enviado un correo para cambiar la contraseña."; authStep = null; render(); })
+    .catch(err => { authError = translateAuthError(err); render(); });
+}
+
+function logout() {
+  auth.signOut().then(() => {
+    me = "";
+    tab = "miembros";
+    hensOpen = false;
+    document.getElementById("whoamiBox").outerHTML = `<div id="whoamiBox"></div>`;
+    render();
+  });
+}
+
+function tryAutoLogin() {
+  if (me) return;
+  const user = auth.currentUser;
+  if (!user) return;
+  const match = members.find(m => m.email === user.email);
+  if (match) {
+    me = match.name;
+    render();
+  }
+}
+
+auth.onAuthStateChanged((user) => {
+  authReady = true;
+  if (user) tryAutoLogin();
+  render();
+});
 
 document.querySelectorAll("#tabbar button").forEach(btn => {
   btn.addEventListener("click", () => {
@@ -459,6 +588,12 @@ function currentTurno() {
 }
 
 function render() {
+  const whoamiBox = document.getElementById("whoamiBox");
+  if (whoamiBox) {
+    whoamiBox.innerHTML = me
+      ? `<span class="hi">Hola, ${me}</span><button class="logout-btn" onclick="logout()" title="Cerrar sesión">⎋</button>`
+      : "";
+  }
   const main = document.getElementById("main");
   if (hensOpen && me) {
     main.innerHTML = renderHens();
@@ -607,28 +742,98 @@ function renderTurnos() {
     </div>`;
 }
 
-function renderMiembros() {
-  const identifyHtml = !me ? `
+function renderAuthLogo() {
+  return `
+    <svg width="40" height="40" viewBox="0 0 32 32">
+      <path d="M16 3C22 3 27 13 27 20C27 26 22 30 16 30C10 30 5 26 5 20C5 13 10 3 16 3Z" fill="#FFFFFF"/>
+      <circle cx="16" cy="14" r="7" fill="#F5B700" stroke="#101010" stroke-width="1" stroke-opacity="0.3"/>
+    </svg>`;
+}
+
+function renderIdentifyBlock() {
+  if (me) return "";
+
+  const errorHtml = authError ? `<p class="auth-error">${authError}</p>` : "";
+  const noticeHtml = authNotice ? `<p class="auth-notice">${authNotice}</p>` : "";
+
+  if (!authReady) {
+    return `<div class="identify"><p>Comprobando sesión…</p></div>`;
+  }
+
+  if (authStep === "password") {
+    return `
+      <div class="identify">
+        ${renderAuthLogo()}
+        <h2>Hola, ${authTargetName}</h2>
+        <p>Escribe tu contraseña para entrar</p>
+        ${errorHtml}${noticeHtml}
+        <div class="row">
+          <input id="authPassword" type="password" placeholder="Contraseña" onkeydown="if(event.key==='Enter') submitPassword()" />
+          <button class="btn-icon" onclick="submitPassword()">→</button>
+        </div>
+        <div class="auth-links">
+          <button class="link-btn" onclick="startPasswordReset()">¿Olvidaste tu contraseña?</button>
+          <button class="link-btn muted" onclick="cancelAuth()">Volver</button>
+        </div>
+      </div>`;
+  }
+
+  if (authStep === "register") {
+    const isNew = !authTargetName;
+    return `
+      <div class="identify">
+        ${renderAuthLogo()}
+        <h2>${isNew ? "Nuevo en el grupo" : `Hola, ${authTargetName}`}</h2>
+        <p>${isNew ? "Crea tu cuenta para entrar" : "Todavía no tienes cuenta, créala para entrar a partir de ahora"}</p>
+        ${errorHtml}${noticeHtml}
+        ${isNew ? `<div class="row"><input id="authName" placeholder="Tu nombre" /></div>` : ""}
+        <div class="row"><input id="authEmail" type="email" placeholder="Tu email" /></div>
+        <div class="row">
+          <input id="authPassword" type="password" placeholder="Contraseña (mínimo 6 caracteres)" value="${isNew ? "" : authTargetName}" onkeydown="if(event.key==='Enter') submitRegister()" />
+          <button class="btn-icon" onclick="submitRegister()">→</button>
+        </div>
+        <div class="auth-links">
+          <button class="link-btn muted" onclick="cancelAuth()">Volver</button>
+        </div>
+      </div>`;
+  }
+
+  if (authStep === "reset") {
+    return `
+      <div class="identify">
+        ${renderAuthLogo()}
+        <h2>Recuperar contraseña</h2>
+        <p>Te mandamos un enlace a tu email para elegir una nueva</p>
+        ${errorHtml}${noticeHtml}
+        <div class="row">
+          <input id="authResetEmail" type="email" placeholder="Tu email" onkeydown="if(event.key==='Enter') submitPasswordReset()" />
+          <button class="btn-icon" onclick="submitPasswordReset()">→</button>
+        </div>
+        <div class="auth-links">
+          <button class="link-btn muted" onclick="cancelAuth()">Volver</button>
+        </div>
+      </div>`;
+  }
+
+  // Pantalla inicial: elegir nombre de la lista, o registrar uno nuevo
+  return `
     <div class="identify">
-      <svg width="40" height="40" viewBox="0 0 32 32">
-        <path d="M16 3C22 3 27 13 27 20C27 26 22 30 16 30C10 30 5 26 5 20C5 13 10 3 16 3Z" fill="#FFFFFF"/>
-        <circle cx="16" cy="14" r="7" fill="#F5B700" stroke="#101010" stroke-width="1" stroke-opacity="0.3"/>
-      </svg>
+      ${renderAuthLogo()}
       <h2>¿Quién eres?</h2>
       ${members.length > 0 ? `
         <p>Elige tu nombre para entrar</p>
-        <div class="identify-options">${members.map(m => `<button onclick="identify('${m.name}')">${m.name}</button>`).join("")}</div>
+        <div class="identify-options">${members.map(m => `<button onclick="selectMemberForLogin('${m.name}')">${m.name}</button>`).join("")}</div>
+        <div class="auth-links"><button class="link-btn" onclick="startNewMemberRegistration()">Soy nuevo, no estoy en la lista</button></div>
       ` : `
         <p>Todavía no hay miembros, sé el primero</p>
-        <div class="row">
-          <input id="selfNameInput" placeholder="Tu nombre" />
-          <button class="btn-icon" onclick="identify(document.getElementById('selfNameInput').value)">+</button>
-        </div>
+        <button class="btn-icon-wide" onclick="startNewMemberRegistration()">Crear mi cuenta</button>
       `}
-    </div>` : "";
+    </div>`;
+}
 
+function renderMiembros() {
   return `
-    ${identifyHtml}
+    ${renderIdentifyBlock()}
     <div class="card">
       <div class="card-title">🐔 Miembros</div>
       <div class="legend">Marca quién está activo: solo los activos entran en el reparto de turnos</div>
@@ -1173,6 +1378,7 @@ function undoSettlement(id) { settledPayments = settledPayments.filter(p => p.id
 // estos listeners se disparan solos aquí y refrescan la pantalla.
 stateDoc("members").onSnapshot((snap) => {
   members = (snap.data() && snap.data().list) || [];
+  tryAutoLogin();
   render();
 });
 stateDoc("turnos").onSnapshot((snap) => {
