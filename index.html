@@ -237,6 +237,10 @@
   .cal-day.has-turno { background: var(--yolk); font-weight: 700; }
   .cal-day.future-turno { background: rgba(245,183,0,0.35); font-weight: 600; }
   .cal-day.is-today { box-shadow: inset 0 0 0 2px var(--klein); }
+  .nest-banner {
+    background: var(--yolk); color: var(--ink); border-radius: 12px;
+    padding: 10px 14px; font-size: 13.5px; text-align: center; margin-bottom: 14px;
+  }
   .ponedero-card { padding: 14px; }
   .ponedero-hint { font-size: 12px; opacity: 0.55; margin: -4px 0 10px; }
   .ponedero-wrap { background: var(--klein); border-radius: 14px; overflow: hidden; aspect-ratio: 1; }
@@ -456,6 +460,35 @@ function confirmFun(actionLabel) {
   funConfirmCounter++;
   return confirm(`${phrase}\n\n${actionLabel}`);
 }
+
+const RECOGIDO_MSGS = {
+  1: "¿Solo uno? ¡Qué poquito ponen hoy!",
+  2: "Dos huevos, ya vamos mejorando.",
+  3: "Tres huevos, nada mal.",
+  4: "Cuatro huevitos, las gallinas se están aplicando.",
+  5: "Cinco huevos, vaya tanda.",
+  6: "¡Seis huevos! Hoy están a tope.",
+  7: "¡Siete huevos! Las gallinas se han puesto las pilas.",
+  8: "¡Ocho! Esto ya es una línea de producción.",
+  9: "Nueve huevos, ¿hay gallina nueva en el equipo o qué?",
+};
+const RECOGIDO_MAX_MSG = "¡Esto ya no es un gallinero, es una fábrica!";
+
+const LLEVO_MSGS = {
+  1: "Bueno, para un huevo revuelto ya te llega.",
+  2: "Con dos, una tortilla francesa decente.",
+  3: "Tres huevos, para unas natillas quizá.",
+  4: "Cuatro huevos, ya hay para un buen bizcocho.",
+  5: "Cinco huevos, menuda tortilla de patatas te espera.",
+  6: "¡Vaya pedazo de tortilla te vas a zampar!",
+  7: "Siete huevos, para una tortilla de siete pisos.",
+  8: "Ocho huevos, ¿banquete familiar o qué?",
+  9: "Nueve huevos, te vas a montar un restaurante.",
+};
+const LLEVO_MAX_MSG = "¡Eso ya es un pedido de catering!";
+
+function recogidoMessage(n) { return RECOGIDO_MSGS[n] || RECOGIDO_MAX_MSG; }
+function llevoMessage(n) { return LLEVO_MSGS[n] || LLEVO_MAX_MSG; }
 
 function requireAdminPassword(actionLabel) {
   const pass = prompt(`Para ${actionLabel} hace falta la contraseña de administrador:`);
@@ -982,7 +1015,9 @@ function renderMiembros() {
 
 function renderPonedero() {
   const count = ponederoDraft.filter(Boolean).length;
+  const currentCount = ponedero.filter(Boolean).length;
   return `
+    <div class="nest-banner">📦 Ahora mismo hay <strong>${currentCount}</strong> ${currentCount === 1 ? "huevo" : "huevos"} en el nido</div>
     <div class="card ponedero-card">
       <div class="card-title">Ponedero</div>
       <p class="ponedero-hint">Marca o desmarca los huevos y pulsa "Confirmar" para registrar el grupo.</p>
@@ -1353,6 +1388,12 @@ function ponederoDirty() { return ponederoDraft.some((v,i) => v !== ponedero[i])
 function confirmPonedero() {
   const recogidos = ponederoDraft.filter((v,i) => v && !ponedero[i]).length;
   const llevados = ponederoDraft.filter((v,i) => !v && ponedero[i]).length;
+
+  const lines = [];
+  if (recogidos > 0) lines.push(recogidoMessage(recogidos));
+  if (llevados > 0) lines.push(llevoMessage(llevados));
+  if (lines.length > 0 && !confirm(lines.join("\n"))) return;
+
   const entries = [];
   if (recogidos > 0) entries.push({ id: uid(), member: me || "Alguien", ts: new Date().toISOString(), action: "recogio", count: recogidos });
   if (llevados > 0) entries.push({ id: uid(), member: me || "Alguien", ts: new Date().toISOString(), action: "llevo", count: llevados });
