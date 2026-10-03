@@ -439,6 +439,24 @@ const AVOID_PAIRS = [["german","rosa"], ["oskar","susana"]];
 // Contraseña de administrador para acciones delicadas (por ahora, borrar a un
 // miembro). Se puede reutilizar para otras acciones sensibles más adelante.
 const ADMIN_PASSWORD = "gallinero";
+// Confirmaciones antes de borrar algo, con frases que van rotando para que
+// no sea siempre el mismo aviso aburrido.
+const FUN_CONFIRMATIONS = [
+  "¿Seguro? Esto desaparece más rápido que un huevo en una tortilla.",
+  "Ojo, esto no tiene marcha atrás, como las plumas al viento. ¿Confirmas?",
+  "¿De verdad, de verdad? Ni la gallina más lista puede deshacer esto.",
+  "Esto se esfuma para siempre, como el grano al amanecer. ¿Seguimos?",
+  "Cuidado, acción sin vuelta atrás. Más definitiva que un huevo frito. ¿Lo confirmas?",
+  "¿Segura del todo? Una vez roto el huevo, no se puede volver a pegar.",
+  "Esto se va al gallinero de los recuerdos, para siempre. ¿Adelante?",
+];
+let funConfirmCounter = 0;
+function confirmFun(actionLabel) {
+  const phrase = FUN_CONFIRMATIONS[funConfirmCounter % FUN_CONFIRMATIONS.length];
+  funConfirmCounter++;
+  return confirm(`${phrase}\n\n${actionLabel}`);
+}
+
 function requireAdminPassword(actionLabel) {
   const pass = prompt(`Para ${actionLabel} hace falta la contraseña de administrador:`);
   if (pass === null) return false;
@@ -450,6 +468,12 @@ function requireAdminPassword(actionLabel) {
 // en botones, listas y desplegables (no cambia el orden guardado).
 function sortedMembers() {
   return [...members].sort((a, b) => a.name.localeCompare(b.name, "es"));
+}
+
+// Turnos en orden cronológico (por fecha de inicio), útil porque a veces se
+// añaden o se intercambian a mano y no siempre en el orden correcto.
+function sortedTurnos() {
+  return [...turnos].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 }
 function normalizeName(s) { return s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase(); }
 function isForbiddenPair(a, b) {
@@ -772,7 +796,7 @@ function renderTurnos() {
       <div class="card-title">🪶 Turnos de limpieza</div>
       <div class="legend">💧 Desinfectar &nbsp;·&nbsp; 🐛 Desparasitar</div>
       <ul class="list">
-        ${turnos.map(t => `
+        ${sortedTurnos().map(t => `
           <li class="${t.done ? "done" : ""}">
             <button class="check" onclick="toggleTurno('${t.id}')">${t.done ? "✓" : ""}</button>
             <div class="list-text"><strong>${t.member}</strong><span>${formatWeekRange(t.start, t.end)}</span></div>
@@ -1247,7 +1271,12 @@ function addTurno() {
 }
 function toggleTurno(id) { turnos = turnos.map(t => t.id === id ? { ...t, done: !t.done } : t); saveTurnos(); render(); }
 function toggleTurnoFlag(id, flag) { turnos = turnos.map(t => t.id === id ? { ...t, [flag]: !t[flag] } : t); saveTurnos(); render(); }
-function removeTurno(id) { turnos = turnos.filter(t => t.id !== id); saveTurnos(); render(); }
+function removeTurno(id) {
+  if (!confirmFun("Vas a borrar este turno.")) return;
+  turnos = turnos.filter(t => t.id !== id);
+  saveTurnos();
+  render();
+}
 function shiftMonth(delta) { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth()+delta, 1); render(); }
 
 function toggleDonePicker(turnoId) { pickingDoneFor = (pickingDoneFor === turnoId) ? null : turnoId; render(); }
@@ -1333,7 +1362,12 @@ function confirmPonedero() {
   render();
 }
 function cancelPonedero() { ponederoDraft = [...ponedero]; render(); }
-function deleteLogEntry(id) { ponederoLog = ponederoLog.filter(e => e.id !== id); savePonedero(); render(); }
+function deleteLogEntry(id) {
+  if (!confirmFun("Vas a borrar esta entrada del registro.")) return;
+  ponederoLog = ponederoLog.filter(e => e.id !== id);
+  savePonedero();
+  render();
+}
 
 function addHen() {
   const name = document.getElementById("newHenName").value.trim();
@@ -1343,7 +1377,12 @@ function addHen() {
   saveHens();
   render();
 }
-function removeHen(id) { hens = hens.filter(h => h.id !== id); saveHens(); render(); }
+function removeHen(id) {
+  if (!confirmFun("Vas a borrar esta gallina de la lista.")) return;
+  hens = hens.filter(h => h.id !== id);
+  saveHens();
+  render();
+}
 function openHen(id) { selectedHenId = id; render(); }
 function handleHenPhotoUpload(henId, file) {
   if (!file) return;
@@ -1388,6 +1427,7 @@ function saveEditNote(henId, noteId) {
   render();
 }
 function deleteNote(henId, noteId) {
+  if (!confirmFun("Vas a borrar esta anotación del historial.")) return;
   hens = hens.map(h => h.id === henId ? { ...h, notes: h.notes.filter(n => n.id !== noteId) } : h);
   if (editingNote && editingNote.henId === henId && editingNote.noteId === noteId) editingNote = null;
   saveHens();
@@ -1416,6 +1456,7 @@ function saveEditEntry(id) {
   render();
 }
 function deleteEntry(id) {
+  if (!confirmFun("Vas a borrar esta entrada de Info.")) return;
   infoEntries = infoEntries.filter(e => e.id !== id);
   if (editingEntryId === id) editingEntryId = null;
   saveInfo();
@@ -1448,7 +1489,10 @@ function handleUpload(e) {
   };
   reader.readAsDataURL(file);
 }
-function removeFoto(id) { fotosCol.doc(id).delete(); }
+function removeFoto(id) {
+  if (!confirmFun("Vas a borrar esta foto.")) return;
+  fotosCol.doc(id).delete();
+}
 
 function addItem() {
   const input = document.getElementById("newItem");
@@ -1459,7 +1503,12 @@ function addItem() {
   render();
 }
 function toggleItem(id) { compra = compra.map(i => i.id === id ? { ...i, checked: !i.checked } : i); saveCompra(); render(); }
-function removeItem(id) { compra = compra.filter(i => i.id !== id); saveCompra(); render(); }
+function removeItem(id) {
+  if (!confirmFun("Vas a borrar este artículo de la lista.")) return;
+  compra = compra.filter(i => i.id !== id);
+  saveCompra();
+  render();
+}
 
 function addExpense() {
   const member = document.getElementById("newExpenseMember").value;
@@ -1470,14 +1519,24 @@ function addExpense() {
   saveCompra();
   render();
 }
-function removeExpense(id) { expenses = expenses.filter(e => e.id !== id); saveCompra(); render(); }
+function removeExpense(id) {
+  if (!confirmFun("Vas a borrar este gasto.")) return;
+  expenses = expenses.filter(e => e.id !== id);
+  saveCompra();
+  render();
+}
 
 function markSettled(from, to, amount) {
   settledPayments.push({ id: uid(), from, to, amount, date: new Date().toISOString().slice(0,10) });
   saveCompra();
   render();
 }
-function undoSettlement(id) { settledPayments = settledPayments.filter(p => p.id !== id); saveCompra(); render(); }
+function undoSettlement(id) {
+  if (!confirmFun("Vas a deshacer este pago saldado.")) return;
+  settledPayments = settledPayments.filter(p => p.id !== id);
+  saveCompra();
+  render();
+}
 
 // ---- Conexión en tiempo real con Firestore ----
 // En cuanto cualquiera cambia algo (en su móvil, en el suyo, donde sea),
