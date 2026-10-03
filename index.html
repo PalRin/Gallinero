@@ -313,12 +313,37 @@ const usernamesCol = db.collection("usernames");
 const stateDoc = (name) => db.collection("state").doc(name);
 const fotosCol = db.collection("fotos");
 
-function saveMembers() { stateDoc("members").set({ list: members }); }
-function saveTurnos() { stateDoc("turnos").set({ list: turnos }); }
-function saveInfo() { stateDoc("info").set({ entries: infoEntries }); }
-function saveCompra() { stateDoc("compra").set({ items: compra, expenses, settledPayments }); }
-function savePonedero() { stateDoc("ponedero").set({ marked: ponedero, log: ponederoLog }); }
-function saveHens() { stateDoc("hens").set({ list: hens }); }
+// Candados de seguridad: hasta que cada colección no haya recibido al menos
+// una vez los datos reales de Firebase, está prohibido guardar en ella. Esto
+// evita que una acción muy rápida al abrir la app sobrescriba datos de todos
+// con un array local que todavía estaba vacío (justo lo que pasó el 3 de octubre).
+let membersLoaded = false, turnosLoaded = false, infoLoaded = false,
+    compraLoaded = false, ponederoLoaded = false, hensLoaded = false;
+
+function saveMembers() {
+  if (!membersLoaded) { console.warn("Bloqueado: members aún no cargado"); return; }
+  stateDoc("members").set({ list: members });
+}
+function saveTurnos() {
+  if (!turnosLoaded) { console.warn("Bloqueado: turnos aún no cargado"); return; }
+  stateDoc("turnos").set({ list: turnos });
+}
+function saveInfo() {
+  if (!infoLoaded) { console.warn("Bloqueado: info aún no cargada"); return; }
+  stateDoc("info").set({ entries: infoEntries });
+}
+function saveCompra() {
+  if (!compraLoaded) { console.warn("Bloqueado: compra aún no cargada"); return; }
+  stateDoc("compra").set({ items: compra, expenses, settledPayments });
+}
+function savePonedero() {
+  if (!ponederoLoaded) { console.warn("Bloqueado: ponedero aún no cargado"); return; }
+  stateDoc("ponedero").set({ marked: ponedero, log: ponederoLog });
+}
+function saveHens() {
+  if (!hensLoaded) { console.warn("Bloqueado: hens aún no cargado"); return; }
+  stateDoc("hens").set({ list: hens });
+}
 </script>
 
 <script>
@@ -410,6 +435,22 @@ function nextFridayOnOrAfter(iso) {
   return toISODate(d);
 }
 const AVOID_PAIRS = [["german","rosa"], ["oskar","susana"]];
+
+// Contraseña de administrador para acciones delicadas (por ahora, borrar a un
+// miembro). Se puede reutilizar para otras acciones sensibles más adelante.
+const ADMIN_PASSWORD = "gallinero";
+function requireAdminPassword(actionLabel) {
+  const pass = prompt(`Para ${actionLabel} hace falta la contraseña de administrador:`);
+  if (pass === null) return false;
+  if (pass !== ADMIN_PASSWORD) { alert("Contraseña incorrecta."); return false; }
+  return true;
+}
+
+// Lista de miembros ordenada alfabéticamente, para mostrar siempre igual
+// en botones, listas y desplegables (no cambia el orden guardado).
+function sortedMembers() {
+  return [...members].sort((a, b) => a.name.localeCompare(b.name, "es"));
+}
 function normalizeName(s) { return s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase(); }
 function isForbiddenPair(a, b) {
   const na = normalizeName(a), nb = normalizeName(b);
@@ -482,6 +523,43 @@ function startNewMemberRegistration() {
   render();
 }
 
+function startDirectLogin() {
+  authTargetName = "";
+  authError = "";
+  authNotice = "";
+  authStep = "directlogin";
+  render();
+}
+
+// Para cuando alguien ya tiene cuenta de verdad (email+contraseña) pero su
+// nombre ya no está en la lista de miembros (por ejemplo, se borró por error).
+// Inicia sesión con lo que ya existe y lo vuelve a enganchar a la lista, en
+// vez de intentar crear una cuenta nueva con un email que ya está en uso.
+function submitDirectLogin() {
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value;
+  if (!email || !password) { authError = "Rellena email y contraseña."; render(); return; }
+
+  auth.signInWithEmailAndPassword(email, password)
+    .then(() => usernamesCol.where("email", "==", email).limit(1).get())
+    .then(snap => {
+      if (snap.empty) {
+        authError = "Esa cuenta no está asociada a ningún nombre. Dímelo y lo miramos.";
+        render();
+        return;
+      }
+      const name = snap.docs[0].id;
+      if (!members.some(m => m.name === name)) {
+        members.push({ name, active: true, email });
+        saveMembers();
+      }
+      me = name;
+      authStep = null;
+      render();
+    })
+    .catch(err => { authError = translateAuthError(err); render(); });
+}
+
 function cancelAuth() {
   authStep = null;
   authTargetName = "";
@@ -509,7 +587,7 @@ function submitRegister() {
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   if (!name || !email || !password) { authError = "Rellena nombre, email y contraseña."; render(); return; }
-  if (isNew && members.some(m => m.name === name)) { authError = "Ese nombre ya existe, elígelo en la lista."; render(); return; }
+  if (isNew && members.some(m => m.name.toLowerCase() === name.toLowerCase())) { authError = "Ese nombre ya existe, elígelo en la lista."; render(); return; }
 
   auth.createUserWithEmailAndPassword(email, password)
     .then(() => usernamesCol.doc(name).set({ email }))
@@ -714,7 +792,7 @@ function renderTurnos() {
         <input type="date" id="newTurnoEnd" />
       </div>
       <div class="row">
-        <select id="newTurnoMember"><option value="">Quién</option>${members.map(m => `<option value="${m.name}">${m.name}${m.active ? "" : " (inactivo)"}</option>`).join("")}</select>
+        <select id="newTurnoMember"><option value="">Quién</option>${sortedMembers().map(m => `<option value="${m.name}">${m.name}${m.active ? "" : " (inactivo)"}</option>`).join("")}</select>
         <button class="btn-icon" onclick="addTurno()">+</button>
       </div>
     </div>
@@ -729,7 +807,7 @@ function renderTurnos() {
             <li>
               <div class="list-text"><span>${formatWeekRange(p.start, p.end)}</span></div>
               <select onchange="setProposalMember('${p.id}', this.value)">
-                ${members.filter(m => m.active).map(m => `<option value="${m.name}" ${m.name === p.member ? "selected" : ""}>${m.name}</option>`).join("")}
+                ${sortedMembers().filter(m => m.active).map(m => `<option value="${m.name}" ${m.name === p.member ? "selected" : ""}>${m.name}</option>`).join("")}
               </select>
               <button class="flag-btn active" onclick="approveProposal('${p.id}')" title="Aprobar">✓</button>
               <button class="flag-btn" onclick="discardProposal('${p.id}')" title="Descartar">✕</button>
@@ -756,7 +834,7 @@ function renderIdentifyBlock() {
   const errorHtml = authError ? `<p class="auth-error">${authError}</p>` : "";
   const noticeHtml = authNotice ? `<p class="auth-notice">${authNotice}</p>` : "";
 
-  if (!authReady) {
+  if (!authReady || !membersLoaded) {
     return `<div class="identify"><p>Comprobando sesión…</p></div>`;
   }
 
@@ -793,6 +871,26 @@ function renderIdentifyBlock() {
           <button class="btn-icon" onclick="submitRegister()">→</button>
         </div>
         <div class="auth-links">
+          ${authError && authError.indexOf("ya está registrado") !== -1 ? `<button class="link-btn" onclick="startDirectLogin()">Ya tengo cuenta con ese email, iniciar sesión</button>` : ""}
+          <button class="link-btn muted" onclick="cancelAuth()">Volver</button>
+        </div>
+      </div>`;
+  }
+
+  if (authStep === "directlogin") {
+    return `
+      <div class="identify">
+        ${renderAuthLogo()}
+        <h2>Ya tengo cuenta</h2>
+        <p>Por ejemplo, si tu nombre se borró de la lista pero tu cuenta sigue existiendo</p>
+        ${errorHtml}${noticeHtml}
+        <div class="row"><input id="authEmail" type="email" placeholder="Tu email" /></div>
+        <div class="row">
+          <input id="authPassword" type="password" placeholder="Tu contraseña" onkeydown="if(event.key==='Enter') submitDirectLogin()" />
+          <button class="btn-icon" onclick="submitDirectLogin()">→</button>
+        </div>
+        <div class="auth-links">
+          <button class="link-btn" onclick="startPasswordReset()">¿Olvidaste tu contraseña?</button>
           <button class="link-btn muted" onclick="cancelAuth()">Volver</button>
         </div>
       </div>`;
@@ -822,8 +920,11 @@ function renderIdentifyBlock() {
       <h2>¿Quién eres?</h2>
       ${members.length > 0 ? `
         <p>Elige tu nombre para entrar</p>
-        <div class="identify-options">${members.map(m => `<button onclick="selectMemberForLogin('${m.name}')">${m.name}</button>`).join("")}</div>
-        <div class="auth-links"><button class="link-btn" onclick="startNewMemberRegistration()">Soy nuevo, no estoy en la lista</button></div>
+        <div class="identify-options">${sortedMembers().map(m => `<button onclick="selectMemberForLogin('${m.name}')">${m.name}</button>`).join("")}</div>
+        <div class="auth-links">
+          <button class="link-btn" onclick="startNewMemberRegistration()">Soy nuevo, no estoy en la lista</button>
+          <button class="link-btn muted" onclick="startDirectLogin()">Ya tenía cuenta pero no aparezco en la lista</button>
+        </div>
       ` : `
         <p>Todavía no hay miembros, sé el primero</p>
         <button class="btn-icon-wide" onclick="startNewMemberRegistration()">Crear mi cuenta</button>
@@ -838,7 +939,7 @@ function renderMiembros() {
       <div class="card-title">🐔 Miembros</div>
       <div class="legend">Marca quién está activo: solo los activos entran en el reparto de turnos</div>
       <ul class="list">
-        ${members.map(m => {
+        ${sortedMembers().map(m => {
           const llevados = ponederoLog.filter(e => e.member === m.name && e.action === "llevo").reduce((s,e) => s + (e.count||1), 0);
           return `
             <li>
@@ -1096,7 +1197,7 @@ function renderCompra() {
           </li>`).join("") || `<li class="empty">Sin gastos todavía</li>`}
       </ul>
       <div class="row">
-        <select id="newExpenseMember"><option value="">Quién pagó</option>${members.map(m => `<option value="${m.name}">${m.name}</option>`).join("")}</select>
+        <select id="newExpenseMember"><option value="">Quién pagó</option>${sortedMembers().map(m => `<option value="${m.name}">${m.name}</option>`).join("")}</select>
         <input type="number" step="0.01" id="newExpenseAmount" placeholder="€" />
       </div>
       <div class="row">
@@ -1121,13 +1222,18 @@ function bindEvents() {
 function addMember() {
   const input = document.getElementById("newMember");
   const name = input.value.trim();
-  if (!name || members.some(m => m.name === name)) return;
+  if (!name || members.some(m => m.name.toLowerCase() === name.toLowerCase())) return;
   members.push({ name, active: true });
   input.value = "";
   saveMembers();
   render();
 }
-function removeMember(name) { members = members.filter(m => m.name !== name); saveMembers(); render(); }
+function removeMember(name) {
+  if (!requireAdminPassword(`eliminar a ${name}`)) return;
+  members = members.filter(m => m.name !== name);
+  saveMembers();
+  render();
+}
 function toggleMemberActive(name) { members = members.map(m => m.name === name ? { ...m, active: !m.active } : m); saveMembers(); render(); }
 
 function addTurno() {
@@ -1378,16 +1484,19 @@ function undoSettlement(id) { settledPayments = settledPayments.filter(p => p.id
 // estos listeners se disparan solos aquí y refrescan la pantalla.
 stateDoc("members").onSnapshot((snap) => {
   members = (snap.data() && snap.data().list) || [];
+  membersLoaded = true;
   tryAutoLogin();
   render();
 });
 stateDoc("turnos").onSnapshot((snap) => {
   turnos = (snap.data() && snap.data().list) || [];
+  turnosLoaded = true;
   render();
 });
 stateDoc("info").onSnapshot((snap) => {
   const data = snap.data();
   infoEntries = (data && data.entries) || (data ? [] : DEFAULT_ENTRIES);
+  infoLoaded = true;
   render();
 });
 stateDoc("compra").onSnapshot((snap) => {
@@ -1395,6 +1504,7 @@ stateDoc("compra").onSnapshot((snap) => {
   compra = data.items || [];
   expenses = data.expenses || [];
   settledPayments = data.settledPayments || [];
+  compraLoaded = true;
   render();
 });
 stateDoc("ponedero").onSnapshot((snap) => {
@@ -1402,10 +1512,12 @@ stateDoc("ponedero").onSnapshot((snap) => {
   ponedero = data.marked || Array(PONEDERO_COUNT).fill(false);
   ponederoLog = data.log || [];
   if (!ponederoDirty()) ponederoDraft = [...ponedero];
+  ponederoLoaded = true;
   render();
 });
 stateDoc("hens").onSnapshot((snap) => {
   hens = (snap.data() && snap.data().list) || [];
+  hensLoaded = true;
   render();
 });
 fotosCol.orderBy("ts", "desc").onSnapshot((snap) => {
