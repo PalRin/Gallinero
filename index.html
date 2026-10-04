@@ -142,11 +142,30 @@
   }
   .entry-actions { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
   .add-entry {
-    width: 100%; background: none; border: 2px dashed rgba(1,76,135,0.3); color: var(--klein);
+    width: 100%; background: rgba(255,255,255,0.92); border: 2px dashed rgba(1,76,135,0.45); color: var(--klein);
     border-radius: 14px; padding: 12px; font-weight: 600; font-size: 13.5px; cursor: pointer;
   }
   .add-entry.small { padding: 8px; font-size: 12.5px; margin-top: 10px; }
   .hen-meta { font-size: 12px; opacity: 0.55; margin: -6px 0 10px; text-align: center; }
+  .empty-chip {
+    background: var(--white); color: rgba(16,16,16,0.7); border-radius: 12px;
+    padding: 12px 14px; font-size: 13px; text-align: center; margin-bottom: 12px;
+  }
+  .pill-btn {
+    background: var(--white); color: var(--ink); border: 2px solid var(--yolk);
+    border-radius: 999px; padding: 6px 14px; font-size: 12.5px; font-weight: 600;
+    font-family: 'Inter', sans-serif; cursor: pointer;
+  }
+  .hen-name-chip {
+    background: var(--white); border: 2px solid var(--yolk); border-radius: 14px;
+    padding: 8px 16px; text-align: center; display: flex; flex-direction: column;
+    align-items: center; gap: 2px;
+  }
+  .hen-name-row {
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 17px; color: var(--ink);
+  }
+  .hen-chip-meta { font-size: 12px; color: rgba(16,16,16,0.6); }
   .hens-title {
     display: inline-flex; align-items: center; gap: 6px;
     font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 16px; color: var(--ink);
@@ -196,7 +215,7 @@
     display: flex; flex-direction: column; gap: 6px; margin-top: 10px;
     background: rgba(16,16,16,0.03); border-radius: 10px; padding: 10px;
   }
-  .note-form input, .note-form textarea {
+  .note-form input, .note-form textarea, .note-form select {
     border: 1px solid rgba(16,16,16,0.15); border-radius: 8px; padding: 6px 8px;
     font-size: 13px; font-family: 'Inter', sans-serif; resize: vertical;
   }
@@ -255,7 +274,7 @@
   .photo-meta { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; font-size: 10.5px; opacity: 0.7; }
   .photo-meta button { background: none; border: none; color: var(--ink); opacity: 0.55; cursor: pointer; }
   nav { display: flex; background: #fff; flex-shrink: 0; }
-  nav button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 0 8px; background: none; border: none; color: rgba(16,16,16,0.4); font-size: 10.5px; font-weight: 500; cursor: pointer; }
+  nav button { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 0 8px; background: none; border: none; color: rgba(16,16,16,0.4); font-size: 10.5px; font-weight: 500; cursor: pointer; }
   nav button.active { color: var(--klein); }
   nav button span.ic { font-size: 17px; line-height: 1; }
 </style>
@@ -282,6 +301,7 @@
     <button data-tab="miembros" class="active"><span class="ic">🐔</span><span>Miembros</span></button>
     <button data-tab="ponedero"><span class="ic">🥚</span><span>Ponedero</span></button>
     <button data-tab="info"><span class="ic">ℹ️</span><span>Info</span></button>
+    <button data-tab="mantenimiento"><span class="ic">🔧</span><span>Mantenim.</span></button>
     <button data-tab="compra"><span class="ic">🛒</span><span>Compra</span></button>
   </nav>
 </div>
@@ -335,7 +355,7 @@ function saveInfo() {
 }
 function saveMaintenance() {
   if (!maintenanceLoaded) { console.warn("Bloqueado: mantenimiento aún no cargado"); return; }
-  stateDoc("maintenance").set({ entries: maintenanceEntries });
+  stateDoc("maintenance").set({ items: maintenanceItems });
 }
 function saveCompra() {
   if (!compraLoaded) { console.warn("Bloqueado: compra aún no cargada"); return; }
@@ -376,9 +396,11 @@ const DEFAULT_ENTRIES = [
 let infoEntries = [];
 let editingEntryId = null;
 let addingEntry = false;
-let maintenanceEntries = [];
-let editingMaintId = null;
-let addingMaint = false;
+let maintenanceItems = [];          // cada elemento: { id, name, entries: [{ id, date, notes }] }
+let selectedMaintId = null;
+let editingMaintName = null;
+let addingMaintEntryFor = null;
+let editingMaintEntry = null;       // { itemId, entryId }
 let compra = [];
 
 const PONEDERO_COUNT = 40;
@@ -392,6 +414,7 @@ let hens = [];
 let addingNoteFor = null;
 let editingNote = null;
 let editingHenName = null;
+let editingLogId = null;
 
 let calMonth = (() => { const d = new Date(); d.setDate(1); return d; })();
 
@@ -713,6 +736,7 @@ document.querySelectorAll("#tabbar button").forEach(btn => {
   btn.addEventListener("click", () => {
     tab = btn.dataset.tab;
     hensOpen = false;
+    if (tab === "mantenimiento") selectedMaintId = null;
     document.querySelectorAll("#tabbar button").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     render();
@@ -757,6 +781,7 @@ function render() {
   if (tab === "miembros") main.innerHTML = renderMiembros();
   if (tab === "ponedero") main.innerHTML = renderPonedero();
   if (tab === "info") main.innerHTML = renderInfo();
+  if (tab === "mantenimiento") main.innerHTML = renderMantenimiento();
   if (tab === "compra") main.innerHTML = renderCompra();
   bindEvents();
 }
@@ -1002,9 +1027,14 @@ function renderMiembros() {
       <ul class="list">
         ${sortedMembers().map(m => {
           const llevados = ponederoLog.filter(e => e.member === m.name && e.action === "llevo").reduce((s,e) => s + (e.count||1), 0);
+          const recogidos = ponederoLog.filter(e => e.member === m.name && e.action === "recogio").reduce((s,e) => s + (e.count||1), 0);
           return `
             <li>
-              <div class="list-text"><strong>${m.name}</strong><span>🥚 ${llevados} ${llevados === 1 ? "huevo llevado" : "huevos llevados"}</span></div>
+              <div class="list-text">
+                <strong>${m.name}</strong>
+                <span>🧺 ${llevados} ${llevados === 1 ? "huevo llevado" : "huevos llevados"}</span>
+                <span>🥚 ${recogidos} ${recogidos === 1 ? "huevo recogido" : "huevos recogidos"}</span>
+              </div>
               <button class="flag-btn${m.active ? " active" : ""}" onclick="toggleMemberActive('${m.name}')" title="${m.active ? "Activo" : "Inactivo"}">${m.active ? "✓" : "✕"}</button>
               <button class="trash" onclick="removeMember('${m.name}')">🗑</button>
             </li>`;
@@ -1046,16 +1076,51 @@ function renderPonedero() {
     <div class="card">
       <div class="card-title">Registro</div>
       <ul class="list">
-        ${ponederoLog.map(e => `
-          <li>
-            <div class="list-text">
-              <strong>${e.member}</strong>
-              <span>${e.action === "recogio" ? `🥚 recogió ${e.count} ${e.count === 1 ? "huevo" : "huevos"}` : `🧺 se llevó ${e.count} ${e.count === 1 ? "huevo" : "huevos"}`} · ${formatLogWhen(e.ts)}</span>
-            </div>
-            <button class="trash" onclick="deleteLogEntry('${e.id}')">🗑</button>
-          </li>`).join("") || `<li class="empty">Todavía no hay movimientos</li>`}
+        ${sortedLog().map(renderLogRow).join("") || `<li class="empty">Todavía no hay movimientos</li>`}
       </ul>
     </div>`;
+}
+
+// Registro del ponedero, de más reciente a más antiguo según su fecha y hora reales
+// (así, si se edita una entrada, queda en su sitio).
+function sortedLog() {
+  return [...ponederoLog].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+}
+
+function renderLogRow(e) {
+  if (editingLogId === e.id) {
+    const d = new Date(e.ts);
+    const dateVal = toISODate(d);
+    const timeVal = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const names = sortedMembers().map(m => m.name);
+    if (!names.includes(e.member)) names.push(e.member);
+    return `
+      <li style="display:block;">
+        <div class="note-form" style="margin-top:0;">
+          <select id="editLogMember">${names.map(n => `<option value="${n}" ${n === e.member ? "selected" : ""}>${n}</option>`).join("")}</select>
+          <select id="editLogAction">
+            <option value="recogio" ${e.action === "recogio" ? "selected" : ""}>recogió</option>
+            <option value="llevo" ${e.action === "llevo" ? "selected" : ""}>se llevó</option>
+          </select>
+          <input type="number" min="1" id="editLogCount" value="${e.count}" />
+          <input type="date" id="editLogDate" value="${dateVal}" />
+          <input type="time" id="editLogTime" value="${timeVal}" />
+          <div class="entry-actions">
+            <button class="link-btn" onclick="saveEditLog('${e.id}')">Guardar</button>
+            <button class="link-btn muted" onclick="cancelEditLog()">Cancelar</button>
+          </div>
+        </div>
+      </li>`;
+  }
+  return `
+    <li>
+      <div class="list-text">
+        <strong>${e.member}</strong>
+        <span>${e.action === "recogio" ? `🥚 recogió ${e.count} ${e.count === 1 ? "huevo" : "huevos"}` : `🧺 se llevó ${e.count} ${e.count === 1 ? "huevo" : "huevos"}`} · ${formatLogWhen(e.ts)}</span>
+      </div>
+      <button class="link-btn" onclick="startEditLog('${e.id}')">Editar</button>
+      <button class="trash" onclick="deleteLogEntry('${e.id}')">🗑</button>
+    </li>`;
 }
 
 function renderHens() {
@@ -1066,12 +1131,12 @@ function renderHens() {
     <div class="hen-card" onclick="openHen('${hen.id}')">
       <span class="hen-thumb-lg">${hen.photo ? `<img src="${hen.photo}"/>` : "🐔"}</span>
       <div class="hen-card-text"><strong>${hen.name}</strong>${hen.acquired ? `<span>Desde el ${formatDateEs(hen.acquired)}</span>` : ""}</div>
-    </div>`).join("") || `<div class="empty">Todavía no hay gallinas registradas</div>`;
+    </div>`).join("") || `<div class="empty-chip">Todavía no hay gallinas registradas</div>`;
 
   return `
     <div class="card-title-row">
       <div class="hens-title">🐔 Nuestras gallinas</div>
-      <button class="link-btn" onclick="hensOpen = false; render();">Cerrar</button>
+      <button class="pill-btn" onclick="hensOpen = false; render();">Cerrar</button>
     </div>
     ${cardsHtml}
     <div class="add-hen-card">
@@ -1125,8 +1190,8 @@ function renderHenProfile(hen) {
 
   return `
     <div class="card-title-row">
-      <button class="link-btn" onclick="selectedHenId = null; render();">‹ Volver</button>
-      <button class="trash" onclick="removeHen('${hen.id}'); selectedHenId = null;">🗑</button>
+      <button class="pill-btn" onclick="selectedHenId = null; render();">‹ Volver</button>
+      <button class="pill-btn" onclick="removeHen('${hen.id}')">🗑 Borrar gallina</button>
     </div>
     <div class="hen-profile-head">
       <label class="hen-photo-big">
@@ -1134,24 +1199,132 @@ function renderHenProfile(hen) {
         <input type="file" accept="image/*" hidden onchange="handleHenPhotoUpload('${hen.id}', event.target.files[0])" />
         <span class="hen-photo-edit">${hen.photo ? "Cambiar foto" : "Añadir foto"}</span>
       </label>
-      ${editingHenName === hen.id ? `
-        <div class="row" style="justify-content:center;">
-          <input type="text" id="henNameInput" value="${hen.name}" style="text-align:center; max-width:160px;" onkeydown="if(event.key==='Enter') saveHenName('${hen.id}')" />
-          <button class="link-btn" onclick="saveHenName('${hen.id}')">Guardar</button>
-          <button class="link-btn muted" onclick="cancelEditHenName()">Cancelar</button>
-        </div>
-      ` : `
-        <div class="card-title" style="display:flex; align-items:center; gap:6px;">
-          ${hen.name}
-          <button class="link-btn" onclick="startEditHenName('${hen.id}')" title="Editar nombre" style="font-size:12px;">✏️</button>
-        </div>
-      `}
-      ${hen.acquired ? `<div class="hen-meta">Desde el ${formatDateEs(hen.acquired)}</div>` : ""}
+      <div class="hen-name-chip">
+        ${editingHenName === hen.id ? `
+          <div class="row" style="justify-content:center;">
+            <input type="text" id="henNameInput" value="${hen.name}" style="text-align:center; max-width:150px;" onkeydown="if(event.key==='Enter') saveHenName('${hen.id}')" />
+            <button class="link-btn" onclick="saveHenName('${hen.id}')">Guardar</button>
+            <button class="link-btn muted" onclick="cancelEditHenName()">Cancelar</button>
+          </div>
+        ` : `
+          <div class="hen-name-row">
+            ${hen.name}
+            <button class="link-btn" onclick="startEditHenName('${hen.id}')" title="Editar nombre" style="font-size:12px;">✏️</button>
+          </div>
+        `}
+        ${hen.acquired ? `<div class="hen-chip-meta">Desde el ${formatDateEs(hen.acquired)}</div>` : ""}
+      </div>
     </div>
     <div class="card">
       <div class="card-title">Historial</div>
       <div class="hen-notes">${notesHtml}</div>
       ${addNoteHtml}
+    </div>`;
+}
+
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function stableId(s) {
+  let h = 0;
+  for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return "legacy" + Math.abs(h);
+}
+
+function renderMantenimiento() {
+  const selected = maintenanceItems.find(m => m.id === selectedMaintId);
+  if (selected) return renderMaintProfile(selected);
+
+  const items = [...maintenanceItems].sort((a, b) => a.name.localeCompare(b.name, "es"));
+  const cards = items.map(m => {
+    const dates = m.entries.map(e => e.date).filter(Boolean).sort();
+    const last = dates.length ? dates[dates.length - 1] : null;
+    return `
+      <div class="hen-card" onclick="openMaint('${m.id}')">
+        <span class="hen-thumb-lg">🔧</span>
+        <div class="hen-card-text">
+          <strong>${escHtml(m.name)}</strong>
+          <span>${last ? "Última: " + formatDateEs(last) : "Sin entradas todavía"}</span>
+        </div>
+      </div>`;
+  }).join("") || `<div class="empty-chip">Todavía no hay elementos. Añade el primero abajo, por ejemplo las pilas de una puerta.</div>`;
+
+  return `
+    <div class="card-title-row">
+      <div class="hens-title">🔧 Mantenimiento</div>
+    </div>
+    ${cards}
+    <div class="add-hen-card">
+      <div class="add-hen-title">Añadir elemento</div>
+      <div class="row">
+        <input id="newMaintItemName" placeholder="Ej: Pilas puerta trasera" onkeydown="if(event.key==='Enter') addMaintItem()" />
+        <button class="btn-icon" onclick="addMaintItem()">+</button>
+      </div>
+    </div>`;
+}
+
+function renderMaintProfile(item) {
+  const entriesSorted = [...item.entries].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  const entriesHtml = entriesSorted.map(e => {
+    if (editingMaintEntry && editingMaintEntry.itemId === item.id && editingMaintEntry.entryId === e.id) {
+      return `
+        <div class="note-form">
+          <input type="date" id="editMaintEntryDate" value="${e.date}" />
+          <textarea id="editMaintEntryNotes" rows="2" placeholder="Notas (opcional)">${escHtml(e.notes)}</textarea>
+          <div class="entry-actions">
+            <button class="link-btn" onclick="saveEditMaintEntry('${item.id}','${e.id}')">Guardar</button>
+            <button class="link-btn muted" onclick="cancelEditMaintEntry()">Cancelar</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="note">
+        <div class="note-head">
+          <span class="note-date">${formatDateEs(e.date)}</span>
+          <div class="entry-actions">
+            <button class="link-btn" onclick="startEditMaintEntry('${item.id}','${e.id}')">Editar</button>
+            <button class="trash" onclick="deleteMaintEntry('${item.id}','${e.id}')">🗑</button>
+          </div>
+        </div>
+        ${e.notes ? `<div class="note-text">${escHtml(e.notes)}</div>` : ""}
+      </div>`;
+  }).join("") || `<div class="empty">Sin entradas todavía</div>`;
+
+  const addEntryHtml = addingMaintEntryFor === item.id ? `
+    <div class="note-form">
+      <input type="date" id="newMaintEntryDate" value="${todayISO()}" />
+      <textarea id="newMaintEntryNotes" rows="2" placeholder="Notas (opcional)"></textarea>
+      <div class="entry-actions">
+        <button class="link-btn" onclick="saveNewMaintEntry('${item.id}')">Guardar</button>
+        <button class="link-btn muted" onclick="cancelAddMaintEntry()">Cancelar</button>
+      </div>
+    </div>` : `<button class="add-entry small" onclick="startAddMaintEntry('${item.id}')">+ Añadir entrada</button>`;
+
+  return `
+    <div class="card-title-row">
+      <button class="pill-btn" onclick="selectedMaintId = null; render();">‹ Volver</button>
+      <button class="pill-btn" onclick="removeMaintItem('${item.id}')">🗑 Borrar elemento</button>
+    </div>
+    <div class="hen-profile-head">
+      <div class="hen-name-chip">
+        ${editingMaintName === item.id ? `
+          <div class="row" style="justify-content:center;">
+            <input type="text" id="maintNameInput" value="${escHtml(item.name)}" style="text-align:center; max-width:150px;" onkeydown="if(event.key==='Enter') saveMaintName('${item.id}')" />
+            <button class="link-btn" onclick="saveMaintName('${item.id}')">Guardar</button>
+            <button class="link-btn muted" onclick="cancelEditMaintName()">Cancelar</button>
+          </div>
+        ` : `
+          <div class="hen-name-row">
+            ${escHtml(item.name)}
+            <button class="link-btn" onclick="startEditMaintName('${item.id}')" title="Editar nombre" style="font-size:12px;">✏️</button>
+          </div>
+        `}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Historial</div>
+      <div class="hen-notes">${entriesHtml}</div>
+      ${addEntryHtml}
     </div>`;
 }
 
@@ -1191,53 +1364,7 @@ function renderInfo() {
       </div>
     </div>` : `<button class="add-entry" onclick="startAddEntry()">+ Añadir entrada</button>`;
 
-  const maintSorted = [...maintenanceEntries].sort((a, b) => (a.date < b.date ? 1 : -1));
-  const maintItemsHtml = maintSorted.map(m => {
-    if (editingMaintId === m.id) {
-      return `
-        <div class="note-form">
-          <input type="text" id="editMaintName-${m.id}" value="${m.name.replace(/"/g,'&quot;')}" placeholder="Nombre" />
-          <input type="date" id="editMaintDate-${m.id}" value="${m.date || ""}" />
-          <textarea id="editMaintNotes-${m.id}" rows="2" placeholder="Notas">${m.notes || ""}</textarea>
-          <div class="entry-actions">
-            <button class="link-btn" onclick="saveEditMaint('${m.id}')">Guardar</button>
-            <button class="link-btn muted" onclick="cancelEditMaint()">Cancelar</button>
-          </div>
-        </div>`;
-    }
-    return `
-      <div class="note">
-        <div class="note-head">
-          <span class="note-date">${m.name}${m.date ? " · " + formatDateEs(m.date) : ""}</span>
-          <div class="entry-actions">
-            <button class="link-btn" onclick="startEditMaint('${m.id}')">Editar</button>
-            <button class="trash" onclick="deleteMaint('${m.id}')">🗑</button>
-          </div>
-        </div>
-        ${m.notes ? `<div class="note-text">${m.notes}</div>` : ""}
-      </div>`;
-  }).join("") || `<div class="empty">Sin entradas de mantenimiento todavía</div>`;
-
-  const addMaintHtml = addingMaint ? `
-    <div class="note-form">
-      <input type="text" id="newMaintName" placeholder="Ej: Pilas puerta trasera" />
-      <input type="date" id="newMaintDate" value="${todayISO()}" />
-      <textarea id="newMaintNotes" rows="2" placeholder="Notas (opcional)"></textarea>
-      <div class="entry-actions">
-        <button class="link-btn" onclick="addMaint()">Guardar</button>
-        <button class="link-btn muted" onclick="cancelAddMaint()">Cancelar</button>
-      </div>
-    </div>` : `<button class="add-entry small" onclick="startAddMaint()">+ Añadir elemento</button>`;
-
-  const maintHtml = `
-    <div class="card">
-      <div class="card-title">🔧 Mantenimiento</div>
-      <div class="legend">Pilas de las puertas, revisiones, y cualquier cosa que haya que ir anotando con fecha</div>
-      <div class="hen-notes">${maintItemsHtml}</div>
-      ${addMaintHtml}
-    </div>`;
-
-  return entriesHtml + addFormHtml + maintHtml;
+  return entriesHtml + addFormHtml;
 }
 
 function renderCompra() {
@@ -1455,6 +1582,24 @@ function cancelPonedero() {
   ponederoDraftTouched = false;
   render();
 }
+function startEditLog(id) { editingLogId = id; render(); }
+function cancelEditLog() { editingLogId = null; render(); }
+function saveEditLog(id) {
+  const member = document.getElementById("editLogMember").value;
+  const action = document.getElementById("editLogAction").value;
+  const count = parseInt(document.getElementById("editLogCount").value, 10);
+  const date = document.getElementById("editLogDate").value;
+  const time = document.getElementById("editLogTime").value;
+  if (!member || !count || count < 1 || !date || !time) return;
+  if (!confirmFun("Vas a modificar esta entrada del registro.")) return;
+  const ts = new Date(`${date}T${time}:00`).toISOString();
+  ponederoLog = ponederoLog
+    .map(e => e.id === id ? { ...e, member, action, count, ts } : e)
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  editingLogId = null;
+  savePonedero();
+  render();
+}
 function deleteLogEntry(id) {
   if (!confirmFun("Vas a borrar esta entrada del registro.")) return;
   ponederoLog = ponederoLog.filter(e => e.id !== id);
@@ -1473,6 +1618,7 @@ function addHen() {
 function removeHen(id) {
   if (!confirmFun("Vas a borrar esta gallina de la lista.")) return;
   hens = hens.filter(h => h.id !== id);
+  if (selectedHenId === id) selectedHenId = null;
   saveHens();
   render();
 }
@@ -1482,6 +1628,7 @@ function cancelEditHenName() { editingHenName = null; render(); }
 function saveHenName(id) {
   const newName = document.getElementById("henNameInput").value.trim();
   if (!newName) return;
+  if (!confirmFun("Vas a cambiar el nombre de esta gallina.")) return;
   hens = hens.map(h => h.id === id ? { ...h, name: newName } : h);
   editingHenName = null;
   saveHens();
@@ -1489,6 +1636,8 @@ function saveHenName(id) {
 }
 function handleHenPhotoUpload(henId, file) {
   if (!file) return;
+  const henBefore = hens.find(h => h.id === henId);
+  if (henBefore && henBefore.photo && !confirmFun("Vas a cambiar la foto de esta gallina.")) return;
   const reader = new FileReader();
   reader.onload = (ev) => {
     const img = new Image();
@@ -1566,33 +1715,63 @@ function deleteEntry(id) {
   render();
 }
 
-function startAddMaint() { addingMaint = true; render(); }
-function cancelAddMaint() { addingMaint = false; render(); }
-function addMaint() {
-  const name = document.getElementById("newMaintName").value.trim();
-  const date = document.getElementById("newMaintDate").value;
-  const notes = document.getElementById("newMaintNotes").value.trim();
+function openMaint(id) { selectedMaintId = id; render(); }
+function addMaintItem() {
+  const input = document.getElementById("newMaintItemName");
+  const name = input.value.trim();
   if (!name) return;
-  maintenanceEntries.push({ id: uid(), name, date, notes });
-  addingMaint = false;
+  if (maintenanceItems.some(m => m.name.toLowerCase() === name.toLowerCase())) { alert("Ya existe un elemento con ese nombre."); return; }
+  maintenanceItems.push({ id: uid(), name, entries: [] });
   saveMaintenance();
   render();
 }
-function startEditMaint(id) { editingMaintId = id; render(); }
-function cancelEditMaint() { editingMaintId = null; render(); }
-function saveEditMaint(id) {
-  const name = document.getElementById(`editMaintName-${id}`).value.trim() || "Sin nombre";
-  const date = document.getElementById(`editMaintDate-${id}`).value;
-  const notes = document.getElementById(`editMaintNotes-${id}`).value.trim();
-  maintenanceEntries = maintenanceEntries.map(m => m.id === id ? { ...m, name, date, notes } : m);
-  editingMaintId = null;
+function removeMaintItem(id) {
+  if (!confirmFun("Vas a borrar este elemento y todas sus entradas.")) return;
+  maintenanceItems = maintenanceItems.filter(m => m.id !== id);
+  if (selectedMaintId === id) selectedMaintId = null;
   saveMaintenance();
   render();
 }
-function deleteMaint(id) {
-  if (!confirmFun("Vas a borrar esta entrada de mantenimiento.")) return;
-  maintenanceEntries = maintenanceEntries.filter(m => m.id !== id);
-  if (editingMaintId === id) editingMaintId = null;
+function startEditMaintName(id) { editingMaintName = id; render(); }
+function cancelEditMaintName() { editingMaintName = null; render(); }
+function saveMaintName(id) {
+  const name = document.getElementById("maintNameInput").value.trim();
+  if (!name) return;
+  if (!confirmFun("Vas a cambiar el nombre de este elemento.")) return;
+  maintenanceItems = maintenanceItems.map(m => m.id === id ? { ...m, name } : m);
+  editingMaintName = null;
+  saveMaintenance();
+  render();
+}
+function startAddMaintEntry(itemId) { addingMaintEntryFor = itemId; render(); }
+function cancelAddMaintEntry() { addingMaintEntryFor = null; render(); }
+function saveNewMaintEntry(itemId) {
+  const date = document.getElementById("newMaintEntryDate").value;
+  const notes = document.getElementById("newMaintEntryNotes").value.trim();
+  if (!date) return;
+  maintenanceItems = maintenanceItems.map(m => m.id === itemId ? { ...m, entries: [...m.entries, { id: uid(), date, notes }] } : m);
+  addingMaintEntryFor = null;
+  saveMaintenance();
+  render();
+}
+function startEditMaintEntry(itemId, entryId) { editingMaintEntry = { itemId, entryId }; render(); }
+function cancelEditMaintEntry() { editingMaintEntry = null; render(); }
+function saveEditMaintEntry(itemId, entryId) {
+  const date = document.getElementById("editMaintEntryDate").value;
+  const notes = document.getElementById("editMaintEntryNotes").value.trim();
+  if (!date) return;
+  if (!confirmFun("Vas a modificar esta entrada.")) return;
+  maintenanceItems = maintenanceItems.map(m => m.id === itemId
+    ? { ...m, entries: m.entries.map(e => e.id === entryId ? { ...e, date, notes } : e) } : m);
+  editingMaintEntry = null;
+  saveMaintenance();
+  render();
+}
+function deleteMaintEntry(itemId, entryId) {
+  if (!confirmFun("Vas a borrar esta entrada.")) return;
+  maintenanceItems = maintenanceItems.map(m => m.id === itemId
+    ? { ...m, entries: m.entries.filter(e => e.id !== entryId) } : m);
+  if (editingMaintEntry && editingMaintEntry.entryId === entryId) editingMaintEntry = null;
   saveMaintenance();
   render();
 }
@@ -1662,7 +1841,23 @@ stateDoc("info").onSnapshot((snap) => {
   render();
 });
 stateDoc("maintenance").onSnapshot((snap) => {
-  maintenanceEntries = (snap.data() && snap.data().entries) || [];
+  const data = snap.data();
+  if (data && data.items) {
+    maintenanceItems = data.items;
+  } else if (data && data.entries) {
+    // Formato antiguo (lista plana de entradas): se agrupan por nombre en elementos
+    // con varias entradas. En cuanto alguien guarde algo, ya queda en el formato nuevo.
+    const byName = {};
+    data.entries.forEach(e => {
+      const name = (e.name || "Sin nombre").trim();
+      const key = name.toLowerCase();
+      if (!byName[key]) byName[key] = { id: stableId(key), name, entries: [] };
+      byName[key].entries.push({ id: e.id || stableId(key + (e.date || "")), date: e.date || "", notes: e.notes || "" });
+    });
+    maintenanceItems = Object.values(byName);
+  } else {
+    maintenanceItems = [];
+  }
   maintenanceLoaded = true;
   render();
 });
