@@ -420,6 +420,7 @@ let addingNoteFor = null;
 let editingNote = null;
 let editingHenName = null;
 let editingLogId = null;
+let addingLog = false;
 let protectedUnsubs = [];   // para dejar de escuchar los datos protegidos si se cierra sesión
 let dataError = "";         // aviso visible si Firebase no deja leer algo
 
@@ -1088,6 +1089,32 @@ function renderPonedero() {
       <ul class="list">
         ${sortedLog().map(renderLogRow).join("") || `<li class="empty">Todavía no hay movimientos</li>`}
       </ul>
+    </div>
+    ${renderAddLog()}`;
+}
+
+function renderAddLog() {
+  if (!addingLog) return `<button class="add-entry small" onclick="startAddLog()">🔒 Añadir movimiento (administrador)</button>`;
+  const now = new Date();
+  const names = sortedMembers().map(m => m.name);
+  return `
+    <div class="card" style="margin-top:12px;">
+    <div class="card-title">Añadir movimiento a mano</div>
+    <div class="note-form" style="margin-top:0;">
+      <div class="legend" style="margin:0;">Solo se anota en el registro y en las cuentas de Miembros. No cambia los huevos que hay ahora.</div>
+      <select id="newLogMember">${names.map(n => `<option value="${n}" ${n === me ? "selected" : ""}>${n}</option>`).join("")}</select>
+      <select id="newLogAction">
+        <option value="recogio">recogió</option>
+        <option value="llevo">se llevó</option>
+      </select>
+      <input type="number" min="1" id="newLogCount" placeholder="Cantidad" />
+      <input type="date" id="newLogDate" value="${toISODate(now)}" />
+      <input type="time" id="newLogTime" value="${pad2(now.getHours())}:${pad2(now.getMinutes())}" />
+      <div class="entry-actions">
+        <button class="link-btn" onclick="saveNewLog()">Guardar</button>
+        <button class="link-btn muted" onclick="cancelAddLog()">Cancelar</button>
+      </div>
+    </div>
     </div>`;
 }
 
@@ -1595,6 +1622,31 @@ function confirmPonedero() {
 function cancelPonedero() {
   ponederoDraft = [...ponedero];
   ponederoDraftTouched = false;
+  render();
+}
+function startAddLog() {
+  if (!requireAdminPassword("añadir un movimiento a mano")) return;
+  addingLog = true;
+  render();
+}
+function cancelAddLog() { addingLog = false; render(); }
+// Añade un movimiento a mano al registro (por ejemplo, para reconstruir días anteriores).
+// Solo anota en el registro y en las cuentas de Miembros: NO cambia los huevos del nido.
+function saveNewLog() {
+  const member = document.getElementById("newLogMember").value;
+  const action = document.getElementById("newLogAction").value;
+  const count = parseInt(document.getElementById("newLogCount").value, 10);
+  const date = document.getElementById("newLogDate").value;
+  const time = document.getElementById("newLogTime").value;
+  if (!member || !count || count < 1 || !date || !time) {
+    alert("Rellena quién, la cantidad, la fecha y la hora.");
+    return;
+  }
+  const ts = new Date(`${date}T${time}:00`).toISOString();
+  ponederoLog = [{ id: uid(), member, action, count, ts }, ...ponederoLog]
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  addingLog = false;
+  savePonedero();
   render();
 }
 function startEditLog(id) { editingLogId = id; render(); }
