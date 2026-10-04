@@ -147,6 +147,10 @@
   }
   .add-entry.small { padding: 8px; font-size: 12.5px; margin-top: 10px; }
   .hen-meta { font-size: 12px; opacity: 0.55; margin: -6px 0 10px; text-align: center; }
+  .data-error {
+    background: var(--ink); color: var(--yolk); font-size: 12px; line-height: 1.4;
+    padding: 8px 14px; margin: 0 14px 6px; border-radius: 10px;
+  }
   .empty-chip {
     background: var(--white); color: rgba(16,16,16,0.7); border-radius: 12px;
     padding: 12px 14px; font-size: 13px; text-align: center; margin-bottom: 12px;
@@ -294,6 +298,7 @@
     </div>
   </header>
 
+  <div id="dataBanner"></div>
   <main id="main"></main>
 
   <nav id="tabbar">
@@ -415,6 +420,8 @@ let addingNoteFor = null;
 let editingNote = null;
 let editingHenName = null;
 let editingLogId = null;
+let protectedUnsubs = [];   // para dejar de escuchar los datos protegidos si se cierra sesión
+let dataError = "";         // aviso visible si Firebase no deja leer algo
 
 let calMonth = (() => { const d = new Date(); d.setDate(1); return d; })();
 
@@ -728,7 +735,8 @@ function tryAutoLogin() {
 
 auth.onAuthStateChanged((user) => {
   authReady = true;
-  if (user) tryAutoLogin();
+  if (user) { attachProtectedListeners(); tryAutoLogin(); }
+  else { detachProtectedListeners(); }
   render();
 });
 
@@ -752,6 +760,8 @@ function currentTurno() {
 }
 
 function render() {
+  const banner = document.getElementById("dataBanner");
+  if (banner) banner.innerHTML = dataError ? `<div class="data-error">⚠️ ${dataError}</div>` : "";
   const whoamiBox = document.getElementById("whoamiBox");
   if (whoamiBox) {
     whoamiBox.innerHTML = me
@@ -1260,6 +1270,11 @@ function renderMantenimiento() {
         <input id="newMaintItemName" placeholder="Ej: Pilas puerta trasera" onkeydown="if(event.key==='Enter') addMaintItem()" />
         <button class="btn-icon" onclick="addMaintItem()">+</button>
       </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="card-title">💾 Copia de seguridad</div>
+      <div class="legend">Descarga en este móvil un archivo con todos los datos del gallinero. Pide la contraseña de administrador. Conviene hacerlo de vez en cuando y guardarlo en un sitio privado, porque incluye los emails del grupo.</div>
+      <button class="add-entry" onclick="downloadBackup()">Descargar copia de seguridad</button>
     </div>`;
 }
 
@@ -1776,6 +1791,63 @@ function deleteMaintEntry(itemId, entryId) {
   render();
 }
 
+// ---- Copia de seguridad ----
+function backupDataLoaded() {
+  return membersLoaded && turnosLoaded && infoLoaded && compraLoaded && ponederoLoaded && hensLoaded && maintenanceLoaded;
+}
+
+async function downloadBackup() {
+  // Nunca se genera una copia mientras los datos no hayan terminado de cargar:
+  // saldría vacía o incompleta y daría una falsa sensación de seguridad.
+  if (!backupDataLoaded() || dataError) {
+    alert("Los datos todavía no han terminado de cargar (o hay un fallo de lectura). Espera unos segundos y vuelve a intentarlo, para que la copia no salga incompleta.");
+    return;
+  }
+  if (!requireAdminPassword("descargar la copia de seguridad")) return;
+
+  const now = new Date();
+  const backup = {
+    app: "El Gallinero",
+    formato: 1,
+    creadaEl: now.toISOString(),
+    creadaPor: me || "",
+    nota: "Incluye los emails de los miembros y las fotos de las gallinas. No incluye contraseñas.",
+    state: {
+      members: { list: members },
+      turnos: { list: turnos },
+      info: { entries: infoEntries },
+      maintenance: { items: maintenanceItems },
+      compra: { items: compra, expenses, settledPayments },
+      ponedero: { marked: ponedero, log: ponederoLog },
+      hens: { list: hens },
+    },
+  };
+  const json = JSON.stringify(backup, null, 2);
+  const stamp = `${toISODate(now)}-${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+  const fileName = `gallinero-copia-${stamp}.json`;
+  const file = new File([json], fileName, { type: "application/json" });
+
+  // En el móvil se abre el menú de compartir (con "Guardar en Archivos" en iPhone);
+  // si no está disponible, se descarga el archivo directamente.
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "Copia de seguridad de El Gallinero" });
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") return;  // cerró el menú sin guardar
+      // cualquier otro fallo: se intenta la descarga normal
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function addItem() {
   const input = document.getElementById("newItem");
   const text = input.value.trim();
@@ -1821,67 +1893,103 @@ function undoSettlement(id) {
 }
 
 // ---- Conexión en tiempo real con Firestore ----
-// En cuanto cualquiera cambia algo (en su móvil, en el suyo, donde sea),
-// estos listeners se disparan solos aquí y refrescan la pantalla.
+// La lista de miembros es pública y se escucha siempre. El resto de datos exige haber
+// iniciado sesión, así que se empieza a escucharlos SOLO cuando hay sesión. Antes se
+// intentaba antes de entrar, Firebase decía "sin permiso" y cancelaba la escucha para
+// siempre: las pestañas se quedaban vacías aunque los datos estuvieran intactos.
+function onDataError(name) {
+  return (err) => {
+    console.error("No se pudo leer " + name, err);
+    dataError = "No se han podido cargar algunos datos, así que de momento no se guardará nada. Cierra la app del todo y vuelve a abrirla.";
+    render();
+  };
+}
+
 stateDoc("members").onSnapshot((snap) => {
   members = (snap.data() && snap.data().list) || [];
   membersLoaded = true;
   tryAutoLogin();
   render();
-});
-stateDoc("turnos").onSnapshot((snap) => {
-  turnos = (snap.data() && snap.data().list) || [];
-  turnosLoaded = true;
-  render();
-});
-stateDoc("info").onSnapshot((snap) => {
-  const data = snap.data();
-  infoEntries = (data && data.entries) || (data ? [] : DEFAULT_ENTRIES);
-  infoLoaded = true;
-  render();
-});
-stateDoc("maintenance").onSnapshot((snap) => {
-  const data = snap.data();
-  if (data && data.items) {
-    maintenanceItems = data.items;
-  } else if (data && data.entries) {
-    // Formato antiguo (lista plana de entradas): se agrupan por nombre en elementos
-    // con varias entradas. En cuanto alguien guarde algo, ya queda en el formato nuevo.
-    const byName = {};
-    data.entries.forEach(e => {
-      const name = (e.name || "Sin nombre").trim();
-      const key = name.toLowerCase();
-      if (!byName[key]) byName[key] = { id: stableId(key), name, entries: [] };
-      byName[key].entries.push({ id: e.id || stableId(key + (e.date || "")), date: e.date || "", notes: e.notes || "" });
-    });
-    maintenanceItems = Object.values(byName);
-  } else {
-    maintenanceItems = [];
-  }
-  maintenanceLoaded = true;
-  render();
-});
-stateDoc("compra").onSnapshot((snap) => {
-  const data = snap.data() || {};
-  compra = data.items || [];
-  expenses = data.expenses || [];
-  settledPayments = data.settledPayments || [];
-  compraLoaded = true;
-  render();
-});
-stateDoc("ponedero").onSnapshot((snap) => {
-  const data = snap.data() || {};
-  ponedero = data.marked || Array(PONEDERO_COUNT).fill(false);
-  ponederoLog = data.log || [];
-  if (!ponederoDraftTouched) ponederoDraft = [...ponedero];
-  ponederoLoaded = true;
-  render();
-});
-stateDoc("hens").onSnapshot((snap) => {
-  hens = (snap.data() && snap.data().list) || [];
-  hensLoaded = true;
-  render();
-});
+}, onDataError("miembros"));
+
+function attachProtectedListeners() {
+  if (protectedUnsubs.length) return;
+  dataError = "";
+  protectedUnsubs = [
+    stateDoc("turnos").onSnapshot((snap) => {
+      turnos = (snap.data() && snap.data().list) || [];
+      turnosLoaded = true;
+      render();
+    }, onDataError("turnos")),
+
+    stateDoc("info").onSnapshot((snap) => {
+      const data = snap.data();
+      infoEntries = (data && data.entries) || (data ? [] : DEFAULT_ENTRIES);
+      infoLoaded = true;
+      render();
+    }, onDataError("info")),
+
+    stateDoc("maintenance").onSnapshot((snap) => {
+      const data = snap.data();
+      if (data && data.items) {
+        maintenanceItems = data.items;
+      } else if (data && data.entries) {
+        // Formato antiguo (lista plana de entradas): se agrupan por nombre en elementos
+        // con varias entradas. En cuanto alguien guarde algo, ya queda en el formato nuevo.
+        const byName = {};
+        data.entries.forEach(e => {
+          const name = (e.name || "Sin nombre").trim();
+          const key = name.toLowerCase();
+          if (!byName[key]) byName[key] = { id: stableId(key), name, entries: [] };
+          byName[key].entries.push({ id: e.id || stableId(key + (e.date || "")), date: e.date || "", notes: e.notes || "" });
+        });
+        maintenanceItems = Object.values(byName);
+      } else {
+        maintenanceItems = [];
+      }
+      maintenanceLoaded = true;
+      render();
+    }, onDataError("mantenimiento")),
+
+    stateDoc("compra").onSnapshot((snap) => {
+      const data = snap.data() || {};
+      compra = data.items || [];
+      expenses = data.expenses || [];
+      settledPayments = data.settledPayments || [];
+      compraLoaded = true;
+      render();
+    }, onDataError("compra")),
+
+    stateDoc("ponedero").onSnapshot((snap) => {
+      const data = snap.data() || {};
+      ponedero = data.marked || Array(PONEDERO_COUNT).fill(false);
+      ponederoLog = data.log || [];
+      if (!ponederoDraftTouched) ponederoDraft = [...ponedero];
+      ponederoLoaded = true;
+      render();
+    }, onDataError("ponedero")),
+
+    stateDoc("hens").onSnapshot((snap) => {
+      hens = (snap.data() && snap.data().list) || [];
+      hensLoaded = true;
+      render();
+    }, onDataError("gallinas")),
+  ];
+}
+
+// Al cerrar sesión se deja de escuchar y se vacía lo cargado, para que nadie vea (ni
+// guarde encima de) datos de otra sesión en el mismo móvil.
+function detachProtectedListeners() {
+  protectedUnsubs.forEach(unsub => unsub());
+  protectedUnsubs = [];
+  turnosLoaded = infoLoaded = compraLoaded = ponederoLoaded = hensLoaded = maintenanceLoaded = false;
+  turnos = []; infoEntries = []; compra = []; expenses = []; settledPayments = [];
+  ponedero = Array(PONEDERO_COUNT).fill(false);
+  ponederoDraft = Array(PONEDERO_COUNT).fill(false);
+  ponederoDraftTouched = false;
+  ponederoLog = []; hens = []; maintenanceItems = [];
+}
+
 render();
 </script>
 </body>
